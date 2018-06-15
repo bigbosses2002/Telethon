@@ -1,5 +1,6 @@
 import itertools
 import logging
+import time
 import warnings
 
 from .users import UserMethods
@@ -138,6 +139,12 @@ class UpdateMethods(UserMethods):
         finally:
             self.session.set_update_state(0, state)
             self.session.catching_up = False
+
+    def idle(self):
+        try:
+            time.sleep(2 ** 32 - 1)
+        except KeyboardInterrupt:
+            self.disconnect()
 
     # endregion
 

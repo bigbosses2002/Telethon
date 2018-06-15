@@ -113,12 +113,21 @@ class TelegramBaseClient(abc.ABC):
                  system_version=None,
                  app_version=None,
                  lang_code='en',
-                 system_lang_code='en'):
+                 system_lang_code='en',
+                 update_workers=None,
+                 spawn_read_thread=True):
         """Refer to TelegramClient.__init__ for docs on this method"""
         if not api_id or not api_hash:
             raise ValueError(
                 "Your API ID or Hash cannot be empty or None. "
                 "Refer to telethon.rtfd.io for more information.")
+
+        if update_workers is not None or spawn_read_thread is not True:
+            warnings.warn(
+                'update_workers and spawn_read_thread are deprecated and '
+                'have no effect. Stop passing these arguments and '
+                'consider using asyncio for more speed and control.'
+            )
 
         self._use_ipv6 = use_ipv6
 
