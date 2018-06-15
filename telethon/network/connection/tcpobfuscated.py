@@ -12,14 +12,14 @@ class ConnectionTcpObfuscated(ConnectionTcpAbridged):
     every message with a randomly generated key using the
     AES-CTR mode so the packets are harder to discern.
     """
-    def __init__(self, *, loop, proxy=None, timeout=timedelta(seconds=5)):
-        super().__init__(loop=loop, proxy=proxy, timeout=timeout)
+    def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
+        super().__init__(proxy=proxy, timeout=timeout)
         self._aes_encrypt, self._aes_decrypt = None, None
         self.read = lambda s: self._aes_decrypt.encrypt(self.conn.read(s))
         self.write = lambda d: self.conn.write(self._aes_encrypt.encrypt(d))
 
-    async def connect(self, ip, port):
-        result = await ConnectionTcpFull.connect(self, ip, port)
+    def connect(self, ip, port):
+        result = ConnectionTcpFull.connect(self, ip, port)
         # Obfuscated messages secrets cannot start with any of these
         keywords = (b'PVrG', b'GET ', b'POST', b'\xee' * 4)
         while True:
@@ -43,5 +43,5 @@ class ConnectionTcpObfuscated(ConnectionTcpAbridged):
         self._aes_decrypt = AESModeCTR(decrypt_key, decrypt_iv)
 
         random[56:64] = self._aes_encrypt.encrypt(bytes(random))[56:64]
-        await self.conn.write(bytes(random))
+        self.conn.write(bytes(random))
         return result

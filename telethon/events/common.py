@@ -7,7 +7,7 @@ from ..errors import RPCError
 from ..tl import TLObject, types, functions
 
 
-async def _into_id_set(client, chats):
+def _into_id_set(client, chats):
     """Helper util to turn the input chat or chats into a set of IDs."""
     if chats is None:
         return None
@@ -30,9 +30,9 @@ async def _into_id_set(client, chats):
             # 0x2d45687 == crc32(b'Peer')
             result.add(utils.get_peer_id(chat))
         else:
-            chat = await client.get_input_entity(chat)
+            chat = client.get_input_entity(chat)
             if isinstance(chat, types.InputPeerSelf):
-                chat = await client.get_me(input_peer=True)
+                chat = client.get_me(input_peer=True)
             result.add(utils.get_peer_id(chat))
 
     return result
@@ -62,10 +62,10 @@ class EventBuilder(abc.ABC):
     def build(self, update):
         """Builds an event for the given update if possible, or returns None"""
 
-    async def resolve(self, client):
+    def resolve(self, client):
         """Helper method to allow event builders to be resolved before usage"""
-        self.chats = await _into_id_set(client, self.chats)
-        self._self_id = (await client.get_me(input_peer=True)).user_id
+        self.chats = _into_id_set(client, self.chats)
+        self._self_id = (client.get_me(input_peer=True)).user_id
 
     def _filter_event(self, event):
         """
@@ -110,7 +110,7 @@ class EventCommon(abc.ABC):
         self._client = client
 
     @property
-    async def input_chat(self):
+    def input_chat(self):
         """
         The (:tl:`InputPeer`) (group, megagroup or channel) on which
         the event occurred. This doesn't have the title or anything,
@@ -121,26 +121,23 @@ class EventCommon(abc.ABC):
         """
         if self._input_chat is None and self._chat_peer is not None:
             try:
-                self._input_chat = await self._client.get_input_entity(
+                self._input_chat = self._client.get_input_entity(
                     self._chat_peer
                 )
             except ValueError:
                 ch = isinstance(self._chat_peer, types.PeerChannel)
                 if not ch and self._message_id is not None:
-                    msg = await self._client.get_messages(
+                    msg = self._client.get_messages(
                         None, ids=self._message_id)
                     self._chat = msg._chat
                     self._input_chat = msg._input_chat
                 else:
                     target = utils.get_peer_id(self._chat_peer)
-                    async for d in self._client.iter_dialogs():
+                    for d in self._client.iter_dialogs():
                         if d.id == target:
                             self._chat = d.entity
                             self._input_chat = d.input_entity
-                            # TODO Don't break, exhaust the iterator, otherwise
-                            # async_generator raises RuntimeError: partially-
-                            # exhausted async_generator 'xyz' garbage collected
-                            # break
+                            break
 
         return self._input_chat
 
@@ -149,7 +146,7 @@ class EventCommon(abc.ABC):
         return self._client
 
     @property
-    async def chat(self):
+    def chat(self):
         """
         The (:tl:`User` | :tl:`Chat` | :tl:`Channel`, optional) on which
         the event occurred. This property may make an API call the first time
@@ -163,7 +160,7 @@ class EventCommon(abc.ABC):
             self._chat = self._entities.get(utils.get_peer_id(self._chat_peer))
 
         if self._chat is None:
-            self._chat = await self._client.get_entity(self._input_chat)
+            self._chat = self._client.get_entity(self._input_chat)
 
         return self._chat
 

@@ -47,18 +47,18 @@ class Draft:
         return cls(client=client, peer=update.peer, draft=update.draft)
 
     @property
-    async def entity(self):
+    def entity(self):
         """
         The entity that belongs to this dialog (user, chat or channel).
         """
-        return await self._client.get_entity(self._peer)
+        return self._client.get_entity(self._peer)
 
     @property
-    async def input_entity(self):
+    def input_entity(self):
         """
         Input version of the entity.
         """
-        return await self._client.get_input_entity(self._peer)
+        return self._client.get_input_entity(self._peer)
 
     @property
     def text(self):
@@ -83,7 +83,7 @@ class Draft:
         """
         return not self._text
 
-    async def set_message(
+    def set_message(
             self, text=None, reply_to=0, parse_mode=Default,
             link_preview=None):
         """
@@ -112,9 +112,9 @@ class Draft:
             link_preview = self.link_preview
 
         raw_text, entities =\
-            await self._client._parse_message_text(text, parse_mode)
+            self._client._parse_message_text(text, parse_mode)
 
-        result = await self._client(SaveDraftRequest(
+        result = self._client(SaveDraftRequest(
             peer=self._peer,
             message=raw_text,
             no_webpage=not link_preview,
@@ -131,22 +131,22 @@ class Draft:
 
         return result
 
-    async def send(self, clear=True, parse_mode=Default):
+    def send(self, clear=True, parse_mode=Default):
         """
         Sends the contents of this draft to the dialog. This is just a
         wrapper around ``send_message(dialog.input_entity, *args, **kwargs)``.
         """
-        await self._client.send_message(
+        self._client.send_message(
             self._peer, self.text, reply_to=self.reply_to_msg_id,
             link_preview=self.link_preview, parse_mode=parse_mode,
             clear_draft=clear
         )
 
-    async def delete(self):
+    def delete(self):
         """
         Deletes this draft, and returns ``True`` on success.
         """
-        return await self.set_message(text='')
+        return self.set_message(text='')
 
     def to_dict(self):
         try:

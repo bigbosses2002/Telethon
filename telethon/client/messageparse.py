@@ -45,7 +45,7 @@ class MessageParseMethods(UserMethods):
 
     # region Private methods
 
-    async def _parse_message_text(self, message, parse_mode):
+    def _parse_message_text(self, message, parse_mode):
         """
         Returns a (parsed message, entities) tuple depending on ``parse_mode``.
         """
@@ -64,7 +64,7 @@ class MessageParseMethods(UserMethods):
                 if m:
                     try:
                         msg_entities[i] = types.InputMessageEntityMentionName(
-                            e.offset, e.length, await self.get_input_entity(
+                            e.offset, e.length, self.get_input_entity(
                                 int(m.group(1)) if m.group(1) else e.url
                             )
                         )

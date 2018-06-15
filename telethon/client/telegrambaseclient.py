@@ -1,7 +1,7 @@
 import abc
-import asyncio
 import logging
 import platform
+import threading
 import warnings
 from datetime import timedelta, datetime
 
@@ -113,8 +113,7 @@ class TelegramBaseClient(abc.ABC):
                  system_version=None,
                  app_version=None,
                  lang_code='en',
-                 system_lang_code='en',
-                 loop=None):
+                 system_lang_code='en'):
         """Refer to TelegramClient.__init__ for docs on this method"""
         if not api_id or not api_hash:
             raise ValueError(
@@ -122,7 +121,6 @@ class TelegramBaseClient(abc.ABC):
                 "Refer to telethon.rtfd.io for more information.")
 
         self._use_ipv6 = use_ipv6
-        self._loop = loop or asyncio.get_event_loop()
 
         # Determine what session object we have
         if isinstance(session, str) or session is None:
@@ -148,7 +146,7 @@ class TelegramBaseClient(abc.ABC):
 
         if isinstance(connection, type):
             connection = connection(
-                proxy=proxy, timeout=timeout, loop=self._loop)
+                proxy=proxy, timeout=timeout)
 
         # Used on connection. Capture the variables in a lambda since
         # exporting clients need to create this InvokeWithLayerRequest.
@@ -169,7 +167,7 @@ class TelegramBaseClient(abc.ABC):
         state = MTProtoState(self.session.auth_key)
         self._connection = connection
         self._sender = MTProtoSender(
-            state, connection, self._loop,
+            state, connection,
             first_query=self._init_with(functions.help.GetConfigRequest()),
             update_callback=self._handle_update
         )
@@ -197,7 +195,7 @@ class TelegramBaseClient(abc.ABC):
         # Some further state for subclasses
         self._event_builders = []
         self._events_pending_resolve = []
-        self._event_resolve_lock = asyncio.Lock()
+        self._event_resolve_lock = threading.Lock()
 
         # Default parse mode
         self._parse_mode = markdown
@@ -213,22 +211,14 @@ class TelegramBaseClient(abc.ABC):
 
     # endregion
 
-    # region Properties
-
-    @property
-    def loop(self):
-        return self._loop
-
-    # endregion
-
     # region Connecting
 
-    async def connect(self):
+    def connect(self):
         """
         Connects to Telegram.
         """
         had_auth = self.session.auth_key is not None
-        await self._sender.connect(
+        self._sender.connect(
             self.session.server_address, self.session.port)
 
         if not had_auth:
@@ -241,42 +231,42 @@ class TelegramBaseClient(abc.ABC):
         """
         return self._sender.is_connected()
 
-    async def disconnect(self):
+    def disconnect(self):
         """
         Disconnects from Telegram.
         """
-        await self._sender.disconnect()
+        self._sender.disconnect()
         # TODO What to do with the update state? Does it belong here?
         # self.session.set_update_state(0, self.updates.get_update_state(0))
         self.session.close()
 
-    async def _switch_dc(self, new_dc):
+    def _switch_dc(self, new_dc):
         """
         Permanently switches the current connection to the new data center.
         """
         __log__.info('Reconnecting to new data center %s', new_dc)
-        dc = await self._get_dc(new_dc)
+        dc = self._get_dc(new_dc)
 
         self.session.set_dc(dc.id, dc.ip_address, dc.port)
         # auth_key's are associated with a server, which has now changed
         # so it's not valid anymore. Set to None to force recreating it.
         self.session.auth_key = self._sender.state.auth_key = None
         self.session.save()
-        await self.disconnect()
-        return await self.connect()
+        self.disconnect()
+        return self.connect()
 
     # endregion
 
     # region Working with different connections/Data Centers
 
-    async def _get_dc(self, dc_id, cdn=False):
+    def _get_dc(self, dc_id, cdn=False):
         """Gets the Data Center (DC) associated to 'dc_id'"""
         cls = self.__class__
         if not cls._config:
-            cls._config = await self(functions.help.GetConfigRequest())
+            cls._config = self(functions.help.GetConfigRequest())
 
         if cdn and not self._cdn_config:
-            cls._cdn_config = await self(functions.help.GetCdnConfigRequest())
+            cls._cdn_config = self(functions.help.GetCdnConfigRequest())
             for pk in cls._cdn_config.public_keys:
                 rsa.add_key(pk.public_key)
 
@@ -286,7 +276,7 @@ class TelegramBaseClient(abc.ABC):
             and bool(dc.ipv6) == self._use_ipv6 and bool(dc.cdn) == cdn
         )
 
-    async def _get_exported_sender(self, dc_id):
+    def _get_exported_sender(self, dc_id):
         """
         Returns a cached `MTProtoSender` for the given `dc_id`, or creates
         a new one if it doesn't exist yet, and imports a freshly exported
@@ -295,32 +285,32 @@ class TelegramBaseClient(abc.ABC):
         # Thanks badoualy/kotlogram on /telegram/api/DefaultTelegramClient.kt
         # for clearly showing how to export the authorization
         auth = self._exported_auths.get(dc_id)
-        dc = await self._get_dc(dc_id)
+        dc = self._get_dc(dc_id)
         state = MTProtoState(auth)
         # Can't reuse self._sender._connection as it has its own seqno.
         #
         # If one were to do that, Telegram would reset the connection
         # with no further clues.
-        sender = MTProtoSender(state, self._connection.clone(), self._loop)
-        await sender.connect(dc.ip_address, dc.port)
+        sender = MTProtoSender(state, self._connection.clone())
+        sender.connect(dc.ip_address, dc.port)
         if not auth:
             __log__.info('Exporting authorization for data center %s', dc)
-            auth = await self(functions.auth.ExportAuthorizationRequest(dc_id))
+            auth = self(functions.auth.ExportAuthorizationRequest(dc_id))
             req = self._init_with(functions.auth.ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             ))
-            await sender.send(req)
+            sender.send(req)
             self._exported_auths[dc_id] = sender.state.auth_key
 
         return sender
 
-    async def _get_cdn_client(self, cdn_redirect):
+    def _get_cdn_client(self, cdn_redirect):
         """Similar to ._get_exported_client, but for CDNs"""
         # TODO Implement
         raise NotImplementedError
         session = self._exported_sessions.get(cdn_redirect.dc_id)
         if not session:
-            dc = await self._get_dc(cdn_redirect.dc_id, cdn=True)
+            dc = self._get_dc(cdn_redirect.dc_id, cdn=True)
             session = self.session.clone()
             session.set_dc(dc.id, dc.ip_address, dc.port)
             self._exported_sessions[cdn_redirect.dc_id] = session
@@ -367,10 +357,10 @@ class TelegramBaseClient(abc.ABC):
         raise NotImplementedError
 
     # Let people use client.invoke(SomeRequest()) instead client(...)
-    async def invoke(self, *args, **kwargs):
+    def invoke(self, *args, **kwargs):
         warnings.warn('client.invoke(...) is deprecated, '
                       'use client(...) instead')
-        return await self(*args, **kwargs)
+        return self(*args, **kwargs)
 
     @abc.abstractmethod
     def _handle_update(self, update):

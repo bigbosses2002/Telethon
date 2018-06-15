@@ -1,4 +1,3 @@
-import asyncio
 import itertools
 import logging
 import warnings
@@ -97,7 +96,7 @@ class UpdateMethods(UserMethods):
     def list_update_handlers(self):
         return [callback for callback, _ in self.list_event_handlers()]
 
-    async def catch_up(self):
+    def catch_up(self):
         state = self.session.get_update_state(0)
         if not state or not state.pts:
             return
@@ -105,7 +104,7 @@ class UpdateMethods(UserMethods):
         self.session.catching_up = True
         try:
             while True:
-                d = await self(functions.updates.GetDifferenceRequest(
+                d = self(functions.updates.GetDifferenceRequest(
                     state.pts, state.date, state.qts))
                 if isinstance(d, types.updates.DifferenceEmpty):
                     state.date = d.date
@@ -150,22 +149,22 @@ class UpdateMethods(UserMethods):
                         itertools.chain(update.users, update.chats)}
             for u in update.updates:
                 u._entities = entities
-                self._loop.create_task(self._dispatch_update(u))
+                self._dispatch_update(u)
             return
         if isinstance(update, types.UpdateShort):
             update = update.update
         update._entities = {}
-        self._loop.create_task(self._dispatch_update(update))
+        self._dispatch_update(update)
 
-    async def _dispatch_update(self, update):
+    def _dispatch_update(self, update):
         if self._events_pending_resolve:
             if self._event_resolve_lock.locked():
-                async with self._event_resolve_lock:
+                with self._event_resolve_lock:
                     pass
             else:
-                async with self._event_resolve_lock:
+                with self._event_resolve_lock:
                     for event in self._events_pending_resolve:
-                        await event.resolve(self)
+                        event.resolve(self)
 
             self._events_pending_resolve.clear()
 
@@ -179,7 +178,7 @@ class UpdateMethods(UserMethods):
 
                 event.original_update = update
                 try:
-                    await callback(event)
+                    callback(event)
                 except events.StopPropagation:
                     __log__.debug(
                         "Event handler '{}' stopped chain of "

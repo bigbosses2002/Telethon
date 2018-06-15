@@ -1,5 +1,7 @@
-import asyncio
 import logging
+import queue
+import socket
+import threading
 
 from . import MTProtoPlainSender, authenticator
 from .. import utils
@@ -39,11 +41,10 @@ class MTProtoSender:
     A new authorization key will be generated on connection if no other
     key exists yet.
     """
-    def __init__(self, state, connection, loop, *, retries=5,
+    def __init__(self, state, connection, *, retries=5,
                  first_query=None, update_callback=None):
         self.state = state
         self._connection = connection
-        self._loop = loop
         self._ip = None
         self._port = None
         self._retries = retries
@@ -99,7 +100,7 @@ class MTProtoSender:
 
     # Public API
 
-    async def connect(self, ip, port):
+    def connect(self, ip, port):
         """
         Connects to the specified ``ip:port``, and generates a new
         authorization key for the `MTProtoSender.session` if it does
@@ -112,12 +113,12 @@ class MTProtoSender:
         self._ip = ip
         self._port = port
         self._user_connected = True
-        await self._connect()
+        self._connect()
 
     def is_connected(self):
         return self._user_connected
 
-    async def disconnect(self):
+    def disconnect(self):
         """
         Cleanly disconnects the instance from the network, cancels
         all pending requests, and closes the send and receive loops.
@@ -130,7 +131,7 @@ class MTProtoSender:
         self._user_connected = False
         try:
             __log__.debug('Closing current connection...')
-            await self._connection.close()
+            self._connection.close()
         finally:
             __log__.debug('Cancelling {} pending message(s)...'
                           .format(len(self._pending_messages)))
@@ -141,10 +142,10 @@ class MTProtoSender:
             self._pending_ack.clear()
 
             __log__.debug('Cancelling the send loop...')
-            self._send_loop_handle.cancel()
+            self._send_loop_handle.join()
 
             __log__.debug('Cancelling the receive loop...')
-            self._recv_loop_handle.cancel()
+            self._recv_loop_handle.join()
 
         __log__.info('Disconnection from {} complete!'.format(self._ip))
 
@@ -158,11 +159,11 @@ class MTProtoSender:
 
         .. code-block:: python
 
-            async def method():
+            def method():
                 # Sending (enqueued for the send loop)
                 future = sender.send(request)
                 # Receiving (waits for the receive loop to read the result)
-                result = await future
+                result = future
 
         Designed like this because Telegram may send the response at
         any point, and it can send other items while one waits for it.
@@ -171,7 +172,7 @@ class MTProtoSender:
         would otherwise work.
 
         Since the receiving part is "built in" the future, it's
-        impossible to await receive a result that was never sent.
+        impossible to receive a result that was never sent.
         """
         if utils.is_list_like(request):
             result = []
@@ -191,7 +192,7 @@ class MTProtoSender:
 
     # Private methods
 
-    async def _connect(self):
+    def _connect(self):
         """
         Performs the actual connection, retrying, generating the
         authorization key if necessary, and starting the send and
@@ -202,8 +203,8 @@ class MTProtoSender:
         for retry in range(1, self._retries + 1):
             try:
                 __log__.debug('Connection attempt {}...'.format(retry))
-                await self._connection.connect(self._ip, self._port)
-            except (asyncio.TimeoutError, OSError) as e:
+                self._connection.connect(self._ip, self._port)
+            except (socket.timeout, OSError) as e:
                 _last_error = e
                 __log__.warning('Attempt {} at connecting failed: {}: {}'
                                 .format(retry, type(e).__name__, e))
@@ -221,7 +222,7 @@ class MTProtoSender:
                 try:
                     __log__.debug('New auth_key attempt {}...'.format(retry))
                     self.state.auth_key, self.state.time_offset =\
-                        await authenticator.do_authentication(plain)
+                        authenticator.do_authentication(plain)
                 except (SecurityError, AssertionError) as e:
                     _last_error = e
                     __log__.warning('Attempt {} at new auth_key failed: {}'
@@ -232,35 +233,39 @@ class MTProtoSender:
                 raise _last_error
 
         __log__.debug('Starting send loop')
-        self._send_loop_handle = self._loop.create_task(self._send_loop())
+        self._send_loop_handle = threading.Thread(target=self._send_loop,
+                                                  daemon=True)
+        self._send_loop_handle.start()
 
         __log__.debug('Starting receive loop')
-        self._recv_loop_handle = self._loop.create_task(self._recv_loop())
+        self._recv_loop_handle = threading.Thread(target=self._recv_loop,
+                                                  daemon=True)
+        self._recv_loop_handle.start()
 
         if self._is_first_query:
             __log__.debug('Running first query')
             self._is_first_query = False
-            await self.send(self._first_query)
+            self.send(self._first_query)
 
         __log__.info('Connection to {} complete!'.format(self._ip))
 
-    async def _reconnect(self):
+    def _reconnect(self):
         """
         Cleanly disconnects and then reconnects.
         """
         self._reconnecting = True
 
         __log__.debug('Awaiting for the send loop before reconnecting...')
-        await self._send_loop_handle
+        self._send_loop_handle.join()
 
         __log__.debug('Awaiting for the receive loop before reconnecting...')
-        await self._recv_loop_handle
+        self._recv_loop_handle.join()
 
         __log__.debug('Closing current connection...')
-        await self._connection.close()
+        self._connection.close()
 
         self._reconnecting = False
-        await self._connect()
+        self._connect()
 
     def _clean_containers(self, msg_ids):
         """
@@ -281,7 +286,7 @@ class MTProtoSender:
 
     # Loops
 
-    async def _send_loop(self):
+    def _send_loop(self):
         """
         This loop is responsible for popping items off the send
         queue, encrypting them, and sending them over the network.
@@ -295,7 +300,11 @@ class MTProtoSender:
                 ))
                 self._pending_ack.clear()
 
-            messages = await self._send_queue.get()
+            try:
+                messages = self._send_queue.get(timeout=1)
+            except queue.Empty:
+                continue
+
             if isinstance(messages, list):
                 message = self.state.create_message(MessageContainer(messages))
                 self._pending_messages[message.msg_id] = message
@@ -311,9 +320,9 @@ class MTProtoSender:
             while not any(m.future.cancelled() for m in messages):
                 try:
                     __log__.debug('Sending {} bytes...'.format(len(body)))
-                    await self._connection.send(body)
+                    self._connection.send(body)
                     break
-                except asyncio.TimeoutError:
+                except socket.timeout:
                     continue
                 except OSError as e:
                     __log__.warning('OSError while sending %s', e)
@@ -330,7 +339,7 @@ class MTProtoSender:
             __log__.debug('Outgoing messages {} sent!'
                           .format(', '.join(str(m.msg_id) for m in messages)))
 
-    async def _recv_loop(self):
+    def _recv_loop(self):
         """
         This loop is responsible for reading all incoming responses
         from the network, decrypting and handling or dispatching them.
@@ -344,17 +353,19 @@ class MTProtoSender:
             # on its own after a short delay.
             try:
                 __log__.debug('Receiving items from the network...')
-                body = await self._connection.recv()
-            except asyncio.TimeoutError:
+                body = self._connection.recv()
+            except socket.timeout:
                 # TODO If nothing is received for a minute, send a request
                 continue
             except ConnectionError as e:
                 __log__.info('Connection reset while receiving %s', e)
-                self._loop.create_task(self._reconnect())
+                threading.Thread(target=self._reconnect,
+                                 daemon=True).start()
                 break
             except OSError as e:
                 __log__.warning('OSError while receiving %s', e)
-                self._loop.create_task(self._reconnect())
+                threading.Thread(target=self._reconnect,
+                                 daemon=True).start()
                 break
 
             # TODO Check salt, session_id and sequence_number
@@ -373,7 +384,8 @@ class MTProtoSender:
                 # an actually broken authkey?
                 __log__.warning('Broken authorization key?: {}'.format(e))
                 self.state.auth_key = None
-                self._loop.create_task(self._reconnect())
+                threading.Thread(target=self._reconnect,
+                                 daemon=True).start()
                 break
             except SecurityError as e:
                 # A step while decoding had the incorrect data. This message
@@ -386,11 +398,11 @@ class MTProtoSender:
                 __log__.info('Server replied with an unknown type {:08x}: {!r}'
                              .format(e.invalid_constructor_id, e.remaining))
             else:
-                await self._process_message(message)
+                self._process_message(message)
 
     # Response Handlers
 
-    async def _process_message(self, message):
+    def _process_message(self, message):
         """
         Adds the given message to the list of messages that must be
         acknowledged and dispatches control to different ``_handle_*``
@@ -399,9 +411,9 @@ class MTProtoSender:
         self._pending_ack.add(message.msg_id)
         handler = self._handlers.get(message.obj.CONSTRUCTOR_ID,
                                      self._handle_update)
-        await handler(message)
+        handler(message)
 
-    async def _handle_rpc_result(self, message):
+    def _handle_rpc_result(self, message):
         """
         Handles the result for Remote Procedure Calls:
 
@@ -437,7 +449,7 @@ class MTProtoSender:
             __log__.info('Received response without parent request: {}'
                          .format(rpc_result.body))
 
-    async def _handle_container(self, message):
+    def _handle_container(self, message):
         """
         Processes the inner messages of a container with many of them:
 
@@ -445,9 +457,9 @@ class MTProtoSender:
         """
         __log__.debug('Handling container')
         for inner_message in message.obj.messages:
-            await self._process_message(inner_message)
+            self._process_message(inner_message)
 
-    async def _handle_gzip_packed(self, message):
+    def _handle_gzip_packed(self, message):
         """
         Unpacks the data from a gzipped object and processes it:
 
@@ -456,15 +468,15 @@ class MTProtoSender:
         __log__.debug('Handling gzipped data')
         with BinaryReader(message.obj.data) as reader:
             message.obj = reader.tgread_object()
-            await self._process_message(message)
+            self._process_message(message)
 
-    async def _handle_update(self, message):
+    def _handle_update(self, message):
         __log__.debug('Handling update {}'
                       .format(message.obj.__class__.__name__))
         if self._update_callback:
             self._update_callback(message.obj)
 
-    async def _handle_pong(self, message):
+    def _handle_pong(self, message):
         """
         Handles pong results, which don't come inside a ``rpc_result``
         but are still sent through a request:
@@ -477,7 +489,7 @@ class MTProtoSender:
         if message:
             message.future.set_result(pong)
 
-    async def _handle_bad_server_salt(self, message):
+    def _handle_bad_server_salt(self, message):
         """
         Corrects the currently used server salt to use the right value
         before enqueuing the rejected message to be re-sent:
@@ -490,7 +502,7 @@ class MTProtoSender:
         self.state.salt = bad_salt.new_server_salt
         self._send_queue.put_nowait(self._pending_messages[bad_salt.bad_msg_id])
 
-    async def _handle_bad_notification(self, message):
+    def _handle_bad_notification(self, message):
         """
         Adjusts the current state to be correct based on the
         received bad message notification whenever possible:
@@ -520,7 +532,7 @@ class MTProtoSender:
         # Messages are to be re-sent once we've corrected the issue
         self._send_queue.put_nowait(self._pending_messages[bad_msg.bad_msg_id])
 
-    async def _handle_detailed_info(self, message):
+    def _handle_detailed_info(self, message):
         """
         Updates the current status with the received detailed information:
 
@@ -531,7 +543,7 @@ class MTProtoSender:
         __log__.debug('Handling detailed info')
         self._pending_ack.add(message.obj.answer_msg_id)
 
-    async def _handle_new_detailed_info(self, message):
+    def _handle_new_detailed_info(self, message):
         """
         Updates the current status with the received detailed information:
 
@@ -542,7 +554,7 @@ class MTProtoSender:
         __log__.debug('Handling new detailed info')
         self._pending_ack.add(message.obj.answer_msg_id)
 
-    async def _handle_new_session_created(self, message):
+    def _handle_new_session_created(self, message):
         """
         Updates the current status with the received session information:
 
@@ -553,7 +565,7 @@ class MTProtoSender:
         __log__.debug('Handling new session created')
         self.state.salt = message.obj.server_salt
 
-    async def _handle_ack(self, message):
+    def _handle_ack(self, message):
         """
         Handles a server acknowledge about our messages. Normally
         these can be ignored except in the case of ``auth.logOut``:
@@ -579,7 +591,7 @@ class MTProtoSender:
                 del self._pending_messages[msg_id]
                 msg.future.set_result(True)
 
-    async def _handle_future_salts(self, message):
+    def _handle_future_salts(self, message):
         """
         Handles future salt results, which don't come inside a
         ``rpc_result`` but are still sent through a request:
@@ -594,7 +606,7 @@ class MTProtoSender:
         if msg:
             msg.future.set_result(message.obj)
 
-    async def _handle_state_forgotten(self, message):
+    def _handle_state_forgotten(self, message):
         """
         Handles both :tl:`MsgsStateReq` and :tl:`MsgResendReq` by
         enqueuing a :tl:`MsgsStateInfo` to be sent at a later point.
@@ -602,25 +614,25 @@ class MTProtoSender:
         self.send(MsgsStateInfo(req_msg_id=message.msg_id,
                                 info=chr(1) * len(message.obj.msg_ids)))
 
-    async def _handle_msg_all(self, message):
+    def _handle_msg_all(self, message):
         """
         Handles :tl:`MsgsAllInfo` by doing nothing (yet).
         """
 
 
-class _ContainerQueue(asyncio.Queue):
+class _ContainerQueue(queue.Queue):
     """
-    An asyncio queue that's aware of `MessageContainer` instances.
+    A queue.Queue that's aware of `MessageContainer` instances.
 
     The `get` method returns either a single `TLMessage` or a list
     of them that should be turned into a new `MessageContainer`.
 
     Instances of this class can be replaced with the simpler
-    ``asyncio.Queue`` when needed for testing purposes, and
+    ``queue.Queue`` when needed for testing purposes, and
     a list won't be returned in said case.
     """
-    async def get(self):
-        result = await super().get()
+    def get(self, block=True, timeout=None):
+        result = super().get(block=block, timeout=timeout)
         if self.empty() or isinstance(result.obj, MessageContainer):
             return result
 

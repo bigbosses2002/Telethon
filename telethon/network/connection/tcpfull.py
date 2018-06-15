@@ -13,18 +13,18 @@ class ConnectionTcpFull(Connection):
     Default Telegram mode. Sends 12 additional bytes and
     needs to calculate the CRC value of the packet itself.
     """
-    def __init__(self, *, loop, proxy=None, timeout=timedelta(seconds=5)):
-        super().__init__(loop=loop, proxy=proxy, timeout=timeout)
+    def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
+        super().__init__(proxy=proxy, timeout=timeout)
         self._send_counter = 0
         self.conn = TcpClient(
-            proxy=self._proxy, timeout=self._timeout, loop=self._loop
+            proxy=self._proxy, timeout=self._timeout
         )
         self.read = self.conn.read
         self.write = self.conn.write
 
-    async def connect(self, ip, port):
+    def connect(self, ip, port):
         try:
-            await self.conn.connect(ip, port)
+            self.conn.connect(ip, port)
         except OSError as e:
             if e.errno == errno.EISCONN:
                 return  # Already connected, no need to re-set everything up
@@ -39,13 +39,13 @@ class ConnectionTcpFull(Connection):
     def is_connected(self):
         return self.conn.is_connected
 
-    async def close(self):
+    def close(self):
         self.conn.close()
 
-    async def recv(self):
-        packet_len_seq = await self.read(8)  # 4 and 4
+    def recv(self):
+        packet_len_seq = self.read(8)  # 4 and 4
         packet_len, seq = struct.unpack('<ii', packet_len_seq)
-        body = await self.read(packet_len - 8)
+        body = self.read(packet_len - 8)
         checksum = struct.unpack('<I', body[-4:])[0]
         body = body[:-4]
 
@@ -55,11 +55,11 @@ class ConnectionTcpFull(Connection):
 
         return body
 
-    async def send(self, message):
+    def send(self, message):
         # https://core.telegram.org/mtproto#tcp-transport
         # total length, sequence number, packet and checksum (CRC32)
         length = len(message) + 12
         data = struct.pack('<ii', length, self._send_counter) + message
         crc = struct.pack('<I', crc32(data))
         self._send_counter += 1
-        await self.write(data + crc)
+        self.write(data + crc)

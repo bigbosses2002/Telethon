@@ -5,7 +5,7 @@ The `Connection.send` and `Connection.recv` methods need **not** to be
 safe across several tasks and may use any amount of ``await`` keywords.
 
 The code using these `Connection`'s should be responsible for using
-an ``async with asyncio.Lock:`` block when calling said methods.
+an ``with threading.Lock:`` block when calling said methods.
 
 Said subclasses need not to worry about reconnecting either, and
 should let the errors propagate instead.
@@ -21,7 +21,7 @@ class Connection(abc.ABC):
     Subclasses should implement the actual protocol
     being used when encoding/decoding messages.
     """
-    def __init__(self, *, loop, proxy=None, timeout=timedelta(seconds=5)):
+    def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
         """
         Initializes a new connection.
 
@@ -29,12 +29,11 @@ class Connection(abc.ABC):
         :param proxy: whether to use a proxy or not.
         :param timeout: timeout to be used for all operations.
         """
-        self._loop = loop
         self._proxy = proxy
         self._timeout = timeout
 
     @abc.abstractmethod
-    async def connect(self, ip, port):
+    def connect(self, ip, port):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -52,7 +51,7 @@ class Connection(abc.ABC):
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def close(self):
+    def close(self):
         """Closes the connection."""
         raise NotImplementedError
 
@@ -65,11 +64,11 @@ class Connection(abc.ABC):
         )
 
     @abc.abstractmethod
-    async def recv(self):
+    def recv(self):
         """Receives and unpacks a message"""
         raise NotImplementedError
 
     @abc.abstractmethod
-    async def send(self, message):
+    def send(self, message):
         """Encapsulates and sends the given message"""
         raise NotImplementedError
