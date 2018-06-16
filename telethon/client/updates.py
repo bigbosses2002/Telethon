@@ -1,5 +1,6 @@
 import itertools
 import logging
+import queue
 import time
 import warnings
 
@@ -156,12 +157,21 @@ class UpdateMethods(UserMethods):
                         itertools.chain(update.users, update.chats)}
             for u in update.updates:
                 u._entities = entities
-                self._dispatch_update(u)
+                self._updates.put_nowait(u)
             return
         if isinstance(update, types.UpdateShort):
             update = update.update
         update._entities = {}
-        self._dispatch_update(update)
+        self._updates.put(update)
+
+    def _update_loop(self):
+        while self.is_connected():
+            try:
+                update = self._updates.get(timeout=1)
+            except queue.Empty:
+                continue
+            else:
+                self._dispatch_update(update)
 
     def _dispatch_update(self, update):
         if self._events_pending_resolve:

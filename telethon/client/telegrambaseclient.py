@@ -1,6 +1,7 @@
 import abc
 import logging
 import platform
+import queue
 import threading
 import warnings
 from datetime import timedelta, datetime
@@ -200,6 +201,8 @@ class TelegramBaseClient(abc.ABC):
         self._last_state = datetime.now()
         self._state_delay = timedelta(hours=1)
         self._state = None
+        self._updates = queue.Queue()
+        self._updates_handle = None
 
         # Some further state for subclasses
         self._event_builders = []
@@ -230,6 +233,10 @@ class TelegramBaseClient(abc.ABC):
         self._sender.connect(
             self.session.server_address, self.session.port)
 
+        self._updates_handle = threading.Thread(target=self._update_loop,
+                                                daemon=True)
+        self._updates_handle.start()
+
         if not had_auth:
             self.session.auth_key = self._sender.state.auth_key
             self.session.save()
@@ -245,6 +252,7 @@ class TelegramBaseClient(abc.ABC):
         Disconnects from Telegram.
         """
         self._sender.disconnect()
+        self._updates_handle.join()
         # TODO What to do with the update state? Does it belong here?
         # self.session.set_update_state(0, self.updates.get_update_state(0))
         self.session.close()
@@ -373,6 +381,10 @@ class TelegramBaseClient(abc.ABC):
 
     @abc.abstractmethod
     def _handle_update(self, update):
+        raise NotImplementedError
+
+    @abc.abstractmethod
+    def _update_loop(self):
         raise NotImplementedError
 
     # endregion
