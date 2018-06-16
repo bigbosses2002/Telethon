@@ -143,7 +143,8 @@ class UpdateMethods(UserMethods):
 
     def idle(self):
         try:
-            time.sleep(2 ** 32 - 1)
+            while self.is_connected():
+                time.sleep(1)
         except KeyboardInterrupt:
             self.disconnect()
 
