@@ -20,11 +20,7 @@ class Connection(abc.ABC):
     Subclasses should implement the actual protocol
     being used when encoding/decoding messages.
     """
-<<<<<<< HEAD
-    def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
-=======
-    def __init__(self, *, loop, timeout, proxy=None):
->>>>>>> master
+    def __init__(self, *, timeout, proxy=None):
         """
         Initializes a new connection.
 
