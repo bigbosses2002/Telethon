@@ -363,7 +363,7 @@ class TelegramBaseClient(abc.ABC):
             req = self._init_with(functions.auth.ImportAuthorizationRequest(
                 id=auth.id, bytes=auth.bytes
             ))
-            sender.send(req)
+            sender.send(req).result()  # Wait for the authorization object
             self._exported_auths[dc_id] = sender.state.auth_key
 
         return sender
