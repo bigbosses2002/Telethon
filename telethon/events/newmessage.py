@@ -1,6 +1,6 @@
 import re
 
-from .common import EventBuilder, EventCommon, name_inner_event
+from .common import EventBuilder, EventCommon, name_inner_event, _into_id_set
 from ..tl import types, custom
 
 
@@ -18,14 +18,28 @@ class NewMessage(EventBuilder):
             If set to ``True``, only **outgoing** messages will be handled.
             Mutually exclusive with ``incoming`` (can only set one of either).
 
+        from_users (`entity`, optional):
+            Unlike `chats`, this parameter filters the *sender* of the message.
+            That is, only messages *sent by this user* will be handled. Use
+            `chats` if you want private messages with this/these users.
+            `from_users` lets you filter by messages sent by one or more users
+            across the desired chats.
+
+        forwards (`bool`, optional):
+            Whether forwarded messages should be handled or not. By default,
+            both forwarded and normal messages are included. If it's ``True``
+            *only* forwards will be handled. If it's ``False`` only messages
+            that are *not* forwards will be handled.
+
         pattern (`str`, `callable`, `Pattern`, optional):
             If set, only messages matching this pattern will be handled.
             You can specify a regex-like string which will be matched
             against the message, a callable function that returns ``True``
             if a message is acceptable, or a compiled regex pattern.
     """
-    def __init__(self, incoming=None, outgoing=None,
-                 chats=None, blacklist_chats=False, pattern=None):
+    def __init__(self, chats=None, *, blacklist_chats=False,
+                 incoming=None, outgoing=None,
+                 from_users=None, forwards=None, pattern=None):
         if incoming is not None and outgoing is None:
             outgoing = not incoming
         elif outgoing is not None and incoming is None:
@@ -40,6 +54,8 @@ class NewMessage(EventBuilder):
         super().__init__(chats=chats, blacklist_chats=blacklist_chats)
         self.incoming = incoming
         self.outgoing = outgoing
+        self.from_users = from_users
+        self.forwards = forwards
         if isinstance(pattern, str):
             self.pattern = re.compile(pattern).match
         elif not pattern or callable(pattern):
@@ -48,6 +64,16 @@ class NewMessage(EventBuilder):
             self.pattern = pattern.match
         else:
             raise TypeError('Invalid pattern type given')
+
+        # Should we short-circuit? E.g. perform no check at all
+        self._no_check = all(x is None for x in (
+            self.chats, self.incoming, self.outgoing, self.pattern,
+            self.from_users, self.forwards, self.from_users
+        ))
+
+    def resolve(self, client):
+        super().resolve(client)
+        self.from_users = _into_id_set(client, self.from_users)
 
     def build(self, update):
         if isinstance(update,
@@ -91,18 +117,31 @@ class NewMessage(EventBuilder):
             return
 
         event._entities = update._entities
+
+        # Make messages sent to ourselves outgoing unless they're forwarded.
+        # This makes it consistent with official client's appearance.
+        ori = event.message
+        if isinstance(ori.to_id, types.PeerUser):
+            if ori.from_id == ori.to_id.user_id and not ori.fwd_from:
+                event.message.out = True
+
         return self._message_filter_event(event)
 
     def _message_filter_event(self, event):
-        # Short-circuit if we let pass all events
-        if all(x is None for x in (self.incoming, self.outgoing, self.chats,
-                                   self.pattern)):
+        if self._no_check:
             return event
 
         if self.incoming and event.message.out:
             return
         if self.outgoing and not event.message.out:
             return
+        if self.forwards is not None:
+            if bool(self.forwards) != bool(event.message.fwd_from):
+                return
+
+        if self.from_users is not None:
+            if event.message.from_id not in self.from_users:
+                return
 
         if self.pattern:
             match = self.pattern(event.message.message or '')
@@ -127,6 +166,22 @@ class NewMessage(EventBuilder):
 
                 See `telethon.tl.custom.message.Message` for the rest of
                 available members and methods.
+
+            pattern_match (`obj`):
+                The resulting object from calling the passed ``pattern`` function.
+                Here's an example using a string (defaults to regex match):
+
+                >>> from telethon import TelegramClient, events
+                >>> client = TelegramClient(...)
+                >>>
+                >>> @client.on(events.NewMessage(pattern=r'hi (\w+)!'))
+                ... def handler(event):
+                ...     # In this case, the result is a ``Match`` object
+                ...     # since the ``str`` pattern was converted into
+                ...     # the ``re.compile(pattern).match`` function.
+                ...     print('Welcomed', event.pattern_match.group(1))
+                ...
+                >>>
         """
         def __init__(self, message):
             self.__dict__['_init'] = False
@@ -140,6 +195,7 @@ class NewMessage(EventBuilder):
             super().__init__(chat_peer=chat_peer,
                              msg_id=message.id, broadcast=bool(message.post))
 
+            self.pattern_match = None
             self.message = message
 
         def _set_client(self, client):

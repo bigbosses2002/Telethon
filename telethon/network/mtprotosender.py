@@ -2,6 +2,8 @@ import logging
 import queue
 import socket
 import threading
+import concurrent.futures
+import time
 
 from . import MTProtoPlainSender, authenticator
 from .. import utils
@@ -21,11 +23,12 @@ from ..tl.types import (
 __log__ = logging.getLogger(__name__)
 
 
-# TODO Create some kind of "ReconnectionPolicy" that allows specifying
-# what should be done in case of some errors, with some sane defaults.
-# For instance, should all messages be set with an error upon network
-# loss? Should we try reconnecting forever? A certain amount of times?
-# A timeout? What about recoverable errors, like connection reset?
+# Place this object in the send queue when a reconnection is needed
+# so there is an item to read and we can early quit the loop, since
+# without this it will block until there's something in the queue.
+_reconnect_sentinel = object()
+
+
 class MTProtoSender:
     """
     MTProto Mobile Protocol sender
@@ -41,15 +44,14 @@ class MTProtoSender:
     A new authorization key will be generated on connection if no other
     key exists yet.
     """
-    def __init__(self, state, connection, *, retries=5,
-                 first_query=None, update_callback=None):
+    def __init__(self, state, connection, *,
+                 retries=5, auto_reconnect=True, update_callback=None):
         self.state = state
         self._connection = connection
         self._ip = None
         self._port = None
         self._retries = retries
-        self._first_query = first_query
-        self._is_first_query = bool(first_query)
+        self._auto_reconnect = auto_reconnect
         self._update_callback = update_callback
 
         # Whether the user has explicitly connected or disconnected.
@@ -60,6 +62,7 @@ class MTProtoSender:
         # pending futures should be cancelled.
         self._user_connected = False
         self._reconnecting = False
+        self._disconnected = None
 
         # We need to join the loops upon disconnection
         self._send_loop_handle = None
@@ -79,6 +82,13 @@ class MTProtoSender:
 
         # We need to acknowledge every response from Telegram
         self._pending_ack = set()
+
+        # Similar to pending_messages but only for the last ack.
+        # Ack can't be put in the messages because Telegram never
+        # responds to acknowledges (they're just that, acknowledges),
+        # so it would grow to infinite otherwise, but on bad salt it's
+        # necessary to resend them just like everything else.
+        self._last_ack = None
 
         # Jump table from response ID to method that handles it
         self._handlers = {
@@ -127,6 +137,9 @@ class MTProtoSender:
             __log__.info('User is already disconnected!')
             return
 
+        self._disconnect()
+
+    def _disconnect(self, error=None):
         __log__.info('Disconnecting from {}...'.format(self._ip))
         self._user_connected = False
         try:
@@ -136,18 +149,29 @@ class MTProtoSender:
             __log__.debug('Cancelling {} pending message(s)...'
                           .format(len(self._pending_messages)))
             for message in self._pending_messages.values():
-                message.future.cancel()
+                if error and not message.future.done():
+                    message.future.set_exception(error)
+                else:
+                    message.future.cancel()
 
             self._pending_messages.clear()
             self._pending_ack.clear()
+            self._last_ack = None
 
-            __log__.debug('Cancelling the send loop...')
-            self._send_loop_handle.join()
+            if self._send_loop_handle:
+                __log__.debug('Cancelling the send loop...')
+                self._send_loop_handle.join()
 
-            __log__.debug('Cancelling the receive loop...')
-            self._recv_loop_handle.join()
+            if self._recv_loop_handle:
+                __log__.debug('Cancelling the receive loop...')
+                self._recv_loop_handle.join()
 
         __log__.info('Disconnection from {} complete!'.format(self._ip))
+        if self._disconnected:
+            if error:
+                self._disconnected.set_exception(error)
+            else:
+                self._disconnected.set_result(None)
 
     def send(self, request, ordered=False):
         """
@@ -174,6 +198,9 @@ class MTProtoSender:
         Since the receiving part is "built in" the future, it's
         impossible to receive a result that was never sent.
         """
+        if not self._user_connected:
+            raise ConnectionError('Cannot send requests while disconnected')
+
         if utils.is_list_like(request):
             result = []
             after = None
@@ -190,6 +217,17 @@ class MTProtoSender:
             self._send_queue.put_nowait(message)
             return message.future
 
+    @property
+    def disconnected(self):
+        """
+        Future that resolves when the connection to Telegram
+        ends, either by user action or in the background.
+        """
+        if self._disconnected is not None:
+            return self._disconnected
+        else:
+            raise ConnectionError('Sender was never connected')
+
     # Private methods
 
     def _connect(self):
@@ -199,38 +237,36 @@ class MTProtoSender:
         receive loops.
         """
         __log__.info('Connecting to {}:{}...'.format(self._ip, self._port))
-        _last_error = ConnectionError()
         for retry in range(1, self._retries + 1):
             try:
                 __log__.debug('Connection attempt {}...'.format(retry))
                 self._connection.connect(self._ip, self._port)
             except (socket.timeout, OSError) as e:
-                _last_error = e
                 __log__.warning('Attempt {} at connecting failed: {}: {}'
                                 .format(retry, type(e).__name__, e))
             else:
                 break
         else:
-            raise _last_error
+            raise ConnectionError('Connection to Telegram failed {} times'
+                                  .format(self._retries))
 
         __log__.debug('Connection success!')
         if self.state.auth_key is None:
-            self._is_first_query = bool(self._first_query)
-            _last_error = SecurityError()
             plain = MTProtoPlainSender(self._connection)
             for retry in range(1, self._retries + 1):
                 try:
                     __log__.debug('New auth_key attempt {}...'.format(retry))
                     self.state.auth_key, self.state.time_offset =\
                         authenticator.do_authentication(plain)
+                    break
                 except (SecurityError, AssertionError) as e:
-                    _last_error = e
                     __log__.warning('Attempt {} at new auth_key failed: {}'
                                     .format(retry, e))
-                else:
-                    break
             else:
-                raise _last_error
+                e = ConnectionError('auth_key generation failed {} times'
+                                    .format(self._retries))
+                self._disconnect(error=e)
+                raise e
 
         __log__.debug('Starting send loop')
         self._send_loop_handle = threading.Thread(target=self._send_loop,
@@ -242,11 +278,9 @@ class MTProtoSender:
                                                   daemon=True)
         self._recv_loop_handle.start()
 
-        if self._is_first_query:
-            __log__.debug('Running first query')
-            self._is_first_query = False
-            self.send(self._first_query)
-
+        # First connection or manual reconnection after a failure
+        if self._disconnected is None or self._disconnected.done():
+            self._disconnected = concurrent.futures.Future()
         __log__.info('Connection to {} complete!'.format(self._ip))
 
     def _reconnect(self):
@@ -254,6 +288,7 @@ class MTProtoSender:
         Cleanly disconnects and then reconnects.
         """
         self._reconnecting = True
+        self._send_queue.put_nowait(_reconnect_sentinel)
 
         __log__.debug('Awaiting for the send loop before reconnecting...')
         self._send_loop_handle.join()
@@ -265,7 +300,17 @@ class MTProtoSender:
         self._connection.close()
 
         self._reconnecting = False
-        self._connect()
+
+        retries = self._retries if self._auto_reconnect else 0
+        for retry in range(1, retries + 1):
+            try:
+                self._connect()
+                break
+            except ConnectionError:
+                __log__.info('Failed reconnection retry %d/%d', retry, retries)
+        else:
+            __log__.error('Failed to reconnect automatically.')
+            self._disconnect(error=ConnectionError())
 
     def _clean_containers(self, msg_ids):
         """
@@ -295,15 +340,22 @@ class MTProtoSender:
         """
         while self._user_connected and not self._reconnecting:
             if self._pending_ack:
-                self._send_queue.put_nowait(self.state.create_message(
+                self._last_ack = self.state.create_message(
                     MsgsAck(list(self._pending_ack))
-                ))
+                )
+                self._send_queue.put_nowait(self._last_ack)
                 self._pending_ack.clear()
 
             try:
                 messages = self._send_queue.get(timeout=1)
             except queue.Empty:
                 continue
+
+            if messages == _reconnect_sentinel:
+                if self._reconnecting:
+                    break
+                else:
+                    continue
 
             if isinstance(messages, list):
                 message = self.state.create_message(MessageContainer(messages))
@@ -313,8 +365,10 @@ class MTProtoSender:
                 message = messages
                 messages = [message]
 
-            __log__.debug('Packing {} outgoing message(s)...'
-                          .format(len(messages)))
+            __log__.debug(
+                'Packing %d outgoing message(s) %s...', len(messages),
+                ', '.join(x.obj.__class__.__name__ for x in messages)
+            )
             body = self.state.pack_message(message)
 
             while not any(m.future.cancelled() for m in messages):
@@ -324,8 +378,20 @@ class MTProtoSender:
                     break
                 except socket.timeout:
                     continue
-                except OSError as e:
-                    __log__.warning('OSError while sending %s', e)
+                except concurrent.futures.CancelledError:
+                    return
+                except Exception as e:
+                    if isinstance(e, ConnectionError):
+                        __log__.info('Connection reset while sending %s', e)
+                    elif isinstance(e, OSError):
+                        __log__.warning('OSError while sending %s', e)
+                    else:
+                        __log__.exception('Unhandled exception while receiving')
+                        time.sleep(1)
+
+                    threading.Thread(target=self._reconnect,
+                                     daemon=True).start()
+                    break
             else:
                 # Remove the cancelled messages from pending
                 __log__.info('Some futures were cancelled, aborted send')
@@ -347,23 +413,22 @@ class MTProtoSender:
         Besides `connect`, only this method ever receives data.
         """
         while self._user_connected and not self._reconnecting:
-            # TODO Are there more exceptions besides timeout?
-            # Disconnecting or switching off WiFi only resulted in
-            # timeouts, and once the network was back it continued
-            # on its own after a short delay.
             try:
                 __log__.debug('Receiving items from the network...')
                 body = self._connection.recv()
             except socket.timeout:
-                # TODO If nothing is received for a minute, send a request
                 continue
-            except ConnectionError as e:
-                __log__.info('Connection reset while receiving %s', e)
-                threading.Thread(target=self._reconnect,
-                                 daemon=True).start()
-                break
-            except OSError as e:
-                __log__.warning('OSError while receiving %s', e)
+            except concurrent.futures.CancelledError:
+                return
+            except Exception as e:
+                if isinstance(e, ConnectionError):
+                    __log__.info('Connection reset while receiving %s', e)
+                elif isinstance(e, OSError):
+                    __log__.warning('OSError while receiving %s', e)
+                else:
+                    __log__.exception('Unhandled exception while receiving')
+                    time.sleep(1)
+
                 threading.Thread(target=self._reconnect,
                                  daemon=True).start()
                 break
@@ -391,14 +456,25 @@ class MTProtoSender:
                 # A step while decoding had the incorrect data. This message
                 # should not be considered safe and it should be ignored.
                 __log__.warning('Security error while unpacking a '
-                                'received message:'.format(e))
+                                'received message: {}'.format(e))
                 continue
             except TypeNotFoundError as e:
                 # The payload inside the message was not a known TLObject.
                 __log__.info('Server replied with an unknown type {:08x}: {!r}'
                              .format(e.invalid_constructor_id, e.remaining))
+                continue
+            except:
+                __log__.exception('Unhandled exception while unpacking')
+                time.sleep(1)
             else:
-                self._process_message(message)
+                try:
+                    self._process_message(message)
+                except concurrent.futures.CancelledError:
+                    return
+                except:
+                    __log__.exception('Unhandled exception while '
+                                      'processing %s', message)
+                    time.sleep(1)
 
     # Response Handlers
 
@@ -423,8 +499,8 @@ class MTProtoSender:
         """
         rpc_result = message.obj
         message = self._pending_messages.pop(rpc_result.req_msg_id, None)
-        __log__.debug('Handling RPC result for message {}'
-                      .format(rpc_result.req_msg_id))
+        __log__.debug('Handling RPC result for message %d',
+                      rpc_result.req_msg_id)
 
         if rpc_result.error:
             # TODO Report errors if possible/enabled
@@ -483,8 +559,8 @@ class MTProtoSender:
 
             pong#347773c5 msg_id:long ping_id:long = Pong;
         """
-        __log__.debug('Handling pong')
         pong = message.obj
+        __log__.debug('Handling pong for message %d', pong.msg_id)
         message = self._pending_messages.pop(pong.msg_id, None)
         if message:
             message.future.set_result(pong)
@@ -497,10 +573,20 @@ class MTProtoSender:
             bad_server_salt#edab447b bad_msg_id:long bad_msg_seqno:int
             error_code:int new_server_salt:long = BadMsgNotification;
         """
-        __log__.debug('Handling bad salt')
         bad_salt = message.obj
+        __log__.debug('Handling bad salt for message %d', bad_salt.bad_msg_id)
         self.state.salt = bad_salt.new_server_salt
-        self._send_queue.put_nowait(self._pending_messages[bad_salt.bad_msg_id])
+        if self._last_ack and bad_salt.bad_msg_id == self._last_ack.msg_id:
+            self._send_queue.put_nowait(self._last_ack)
+            return
+
+        try:
+            self._send_queue.put_nowait(
+                self._pending_messages[bad_salt.bad_msg_id])
+        except KeyError:
+            # May be MsgsAck, those are not saved in pending messages
+            __log__.info('Message %d not resent due to bad salt',
+                         bad_salt.bad_msg_id)
 
     def _handle_bad_notification(self, message):
         """
@@ -510,8 +596,8 @@ class MTProtoSender:
             bad_msg_notification#a7eff811 bad_msg_id:long bad_msg_seqno:int
             error_code:int = BadMsgNotification;
         """
-        __log__.debug('Handling bad message')
         bad_msg = message.obj
+        __log__.debug('Handling bad msg for message %d', bad_msg.bad_msg_id)
         if bad_msg.error_code in (16, 17):
             # Sent msg_id too low or too high (respectively).
             # Use the current msg_id to determine the right time offset.
@@ -530,7 +616,13 @@ class MTProtoSender:
             return
 
         # Messages are to be re-sent once we've corrected the issue
-        self._send_queue.put_nowait(self._pending_messages[bad_msg.bad_msg_id])
+        try:
+            self._send_queue.put_nowait(
+                self._pending_messages[bad_msg.bad_msg_id])
+        except KeyError:
+            # May be MsgsAck, those are not saved in pending messages
+            __log__.info('Message %d not resent due to bad msg',
+                         bad_msg.bad_msg_id)
 
     def _handle_detailed_info(self, message):
         """
@@ -540,8 +632,9 @@ class MTProtoSender:
             bytes:int status:int = MsgDetailedInfo;
         """
         # TODO https://goo.gl/VvpCC6
-        __log__.debug('Handling detailed info')
-        self._pending_ack.add(message.obj.answer_msg_id)
+        msg_id = message.obj.answer_msg_id
+        __log__.debug('Handling detailed info for message %d', msg_id)
+        self._pending_ack.add(msg_id)
 
     def _handle_new_detailed_info(self, message):
         """
@@ -551,8 +644,9 @@ class MTProtoSender:
             bytes:int status:int = MsgDetailedInfo;
         """
         # TODO https://goo.gl/G7DPsR
-        __log__.debug('Handling new detailed info')
-        self._pending_ack.add(message.obj.answer_msg_id)
+        msg_id = message.obj.answer_msg_id
+        __log__.debug('Handling new detailed info for message %d', msg_id)
+        self._pending_ack.add(msg_id)
 
     def _handle_new_session_created(self, message):
         """
@@ -580,8 +674,8 @@ class MTProtoSender:
         also removes containers messages when any of their inner
         messages are acknowledged.
         """
-        __log__.debug('Handling acknowledge')
         ack = message.obj
+        __log__.debug('Handling acknowledge for %s', str(ack.msg_ids))
         if self._pending_containers:
             self._clean_containers(ack.msg_ids)
 
@@ -601,7 +695,7 @@ class MTProtoSender:
         """
         # TODO save these salts and automatically adjust to the
         # correct one whenever the salt in use expires.
-        __log__.debug('Handling future salts')
+        __log__.debug('Handling future salts for message %d', message.msg_id)
         msg = self._pending_messages.pop(message.msg_id, None)
         if msg:
             msg.future.set_result(message.obj)
@@ -633,13 +727,15 @@ class _ContainerQueue(queue.Queue):
     """
     def get(self, block=True, timeout=None):
         result = super().get(block=block, timeout=timeout)
-        if self.empty() or isinstance(result.obj, MessageContainer):
+        if self.empty() or result == _reconnect_sentinel or\
+                isinstance(result.obj, MessageContainer):
             return result
 
         result = [result]
         while not self.empty():
             item = self.get_nowait()
-            if isinstance(item.obj, MessageContainer):
+            if item == _reconnect_sentinel or\
+                    isinstance(item.obj, MessageContainer):
                 self.put_nowait(item)
                 break
             else:

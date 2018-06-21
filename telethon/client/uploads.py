@@ -2,6 +2,7 @@ import hashlib
 import io
 import logging
 import os
+import pathlib
 import warnings
 from io import BytesIO
 from mimetypes import guess_type
@@ -128,15 +129,15 @@ class UploadMethods(MessageParseMethods, UserMethods):
                 )
                 images = images[10:]
 
-            result.extend(
-                self.send_file(
+            for x in documents:
+                result.append(self.send_file(
                     entity, x, allow_cache=allow_cache,
                     caption=caption, force_document=force_document,
                     progress_callback=progress_callback, reply_to=reply_to,
                     attributes=attributes, thumb=thumb, voice_note=voice_note,
                     video_note=video_note, **kwargs
-                ) for x in documents
-            )
+                ))
+
             return result
 
         entity = self.get_input_entity(entity)
@@ -185,10 +186,11 @@ class UploadMethods(MessageParseMethods, UserMethods):
         entity = self.get_input_entity(entity)
         if not utils.is_list_like(caption):
             caption = (caption,)
-        captions = [
-            self._parse_message_text(caption or '', parse_mode)
-            for caption in reversed(caption)  # Pop from the end (so reverse)
-        ]
+
+        captions = []
+        for c in reversed(caption):  # Pop from the end (so reverse)
+            captions.append(self._parse_message_text(c or '', parse_mode))
+
         reply_to = utils.get_message_id(reply_to)
 
         # Need to upload the media first, but only if they're not cached yet
@@ -360,6 +362,9 @@ class UploadMethods(MessageParseMethods, UserMethods):
             allow_cache=True, voice_note=False, video_note=False):
         if not file:
             return None, None
+
+        if isinstance(file, pathlib.Path):
+            file = str(file.absolute())
 
         if not isinstance(file, (str, bytes, io.IOBase)):
             # The user may pass a Message containing media (or the media,

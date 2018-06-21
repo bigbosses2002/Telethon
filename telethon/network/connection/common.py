@@ -11,7 +11,6 @@ Said subclasses need not to worry about reconnecting either, and
 should let the errors propagate instead.
 """
 import abc
-from datetime import timedelta
 
 
 class Connection(abc.ABC):
@@ -21,13 +20,17 @@ class Connection(abc.ABC):
     Subclasses should implement the actual protocol
     being used when encoding/decoding messages.
     """
+<<<<<<< HEAD
     def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
+=======
+    def __init__(self, *, loop, timeout, proxy=None):
+>>>>>>> master
         """
         Initializes a new connection.
 
         :param loop: the event loop to be used.
-        :param proxy: whether to use a proxy or not.
         :param timeout: timeout to be used for all operations.
+        :param proxy: whether to use a proxy or not.
         """
         self._proxy = proxy
         self._timeout = timeout

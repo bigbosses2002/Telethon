@@ -1,6 +1,5 @@
 import errno
 import struct
-from datetime import timedelta
 from zlib import crc32
 
 from .common import Connection
@@ -13,11 +12,19 @@ class ConnectionTcpFull(Connection):
     Default Telegram mode. Sends 12 additional bytes and
     needs to calculate the CRC value of the packet itself.
     """
+<<<<<<< HEAD
     def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
         super().__init__(proxy=proxy, timeout=timeout)
         self._send_counter = 0
         self.conn = TcpClient(
             proxy=self._proxy, timeout=self._timeout
+=======
+    def __init__(self, *, loop, timeout, proxy=None):
+        super().__init__(loop=loop, timeout=timeout, proxy=proxy)
+        self._send_counter = 0
+        self.conn = TcpClient(
+            timeout=self._timeout, loop=self._loop, proxy=self._proxy
+>>>>>>> master
         )
         self.read = self.conn.read
         self.write = self.conn.write

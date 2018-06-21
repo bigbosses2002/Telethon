@@ -2,7 +2,9 @@ import abc
 import logging
 import platform
 import queue
+import sys
 import threading
+import time
 import warnings
 from datetime import timedelta, datetime
 
@@ -12,8 +14,8 @@ from ..extensions import markdown
 from ..network import MTProtoSender, ConnectionTcpFull
 from ..network.mtprotostate import MTProtoState
 from ..sessions import Session, SQLiteSession
-from ..tl import TLObject, functions
-from ..tl.all_tlobjects import LAYER
+from ..tl import TLObject, functions, types
+from ..tl.alltlobjects import LAYER
 
 DEFAULT_DC_ID = 4
 DEFAULT_IPV4_IP = '149.154.167.51'
@@ -66,8 +68,33 @@ class TelegramBaseClient(abc.ABC):
             See https://github.com/Anorov/PySocks#usage-1 for more.
 
         timeout (`int` | `float` | `timedelta`, optional):
-            The timeout to be used when receiving responses from
-            the network. Defaults to 5 seconds.
+            The timeout to be used when connecting, sending and receiving
+            responses from the network. This is **not** the timeout to
+            be used when ``await``'ing for invoked requests, and you
+            should use ``asyncio.wait`` or ``asyncio.wait_for`` for that.
+
+        request_retries (`int`, optional):
+            How many times a request should be retried. Request are retried
+            when Telegram is having internal issues (due to either
+            ``errors.ServerError`` or ``errors.RpcCallFailError``),
+            when there is a ``errors.FloodWaitError`` less than
+            ``session.flood_sleep_threshold``, or when there's a
+            migrate error.
+
+            May set to a false-y value (``0`` or ``None``) for infinite
+            retries, but this is not recommended, since some requests can
+            always trigger a call fail (such as searching for messages).
+
+        connection_retries (`int`, optional):
+            How many times the reconnection should retry, either on the
+            initial connection or when Telegram disconnects us. May be
+            set to a false-y value (``0`` or ``None``) for infinite
+            retries, but this is not recommended, since the program can
+            get stuck in an infinite loop.
+
+        auto_reconnect (`bool`, optional):
+            Whether reconnection should be retried `connection_retries`
+            times automatically if Telegram disconnects us or not.
 
         report_errors (`bool`, optional):
             Whether to report RPC errors or not. Defaults to ``True``,
@@ -108,7 +135,10 @@ class TelegramBaseClient(abc.ABC):
                  connection=ConnectionTcpFull,
                  use_ipv6=False,
                  proxy=None,
-                 timeout=timedelta(seconds=5),
+                 timeout=timedelta(seconds=10),
+                 request_retries=5,
+                 connection_retries=5,
+                 auto_reconnect=True,
                  report_errors=True,
                  device_model=None,
                  system_version=None,
@@ -117,7 +147,6 @@ class TelegramBaseClient(abc.ABC):
                  system_lang_code='en',
                  update_workers=None,
                  spawn_read_thread=True):
-        """Refer to TelegramClient.__init__ for docs on this method"""
         if not api_id or not api_hash:
             raise ValueError(
                 "Your API ID or Hash cannot be empty or None. "
@@ -154,6 +183,10 @@ class TelegramBaseClient(abc.ABC):
         self.api_id = int(api_id)
         self.api_hash = api_hash
 
+        self._request_retries = request_retries or sys.maxsize
+        self._connection_retries = connection_retries or sys.maxsize
+        self._auto_reconnect = auto_reconnect
+
         if isinstance(connection, type):
             connection = connection(
                 proxy=proxy, timeout=timeout)
@@ -178,7 +211,8 @@ class TelegramBaseClient(abc.ABC):
         self._connection = connection
         self._sender = MTProtoSender(
             state, connection,
-            first_query=self._init_with(functions.help.GetConfigRequest()),
+            retries=self._connection_retries,
+            auto_reconnect=self._auto_reconnect,
             update_callback=self._handle_update
         )
 
@@ -193,16 +227,14 @@ class TelegramBaseClient(abc.ABC):
         self._last_ping = datetime.now()
         self._ping_delay = timedelta(minutes=1)
 
-        # Also have another delay for GetStateRequest.
-        #
-        # If the connection is kept alive for long without invoking any
-        # high level request the server simply stops sending updates.
-        # TODO maybe we can have ._last_request instead if any req works?
-        self._last_state = datetime.now()
-        self._state_delay = timedelta(hours=1)
-        self._state = None
         self._updates = queue.Queue()
         self._updates_handle = None
+        self._last_request = time.time()
+        self._channel_pts = {}
+
+        # Start with invalid state (-1) so we can have somewhere to store
+        # the state, but also be able to determine if we are authorized.
+        self._state = types.updates.State(-1, 0, datetime.now(), 0, -1)
 
         # Some further state for subclasses
         self._event_builders = []
@@ -223,6 +255,18 @@ class TelegramBaseClient(abc.ABC):
 
     # endregion
 
+    # region Properties
+
+    @property
+    def disconnected(self):
+        """
+        Future that resolves when the connection to Telegram
+        ends, either by user action or in the background.
+        """
+        return self._sender.disconnected
+
+    # endregion
+
     # region Connecting
 
     def connect(self):
@@ -232,6 +276,9 @@ class TelegramBaseClient(abc.ABC):
         had_auth = self.session.auth_key is not None
         self._sender.connect(
             self.session.server_address, self.session.port)
+
+        self._sender.send(self._init_with(
+            functions.help.GetConfigRequest()))
 
         self._updates_handle = threading.Thread(target=self._update_loop,
                                                 daemon=True)
@@ -253,8 +300,6 @@ class TelegramBaseClient(abc.ABC):
         """
         self._sender.disconnect()
         self._updates_handle.join()
-        # TODO What to do with the update state? Does it belong here?
-        # self.session.set_update_state(0, self.updates.get_update_state(0))
         self.session.close()
 
     def _switch_dc(self, new_dc):
@@ -353,7 +398,7 @@ class TelegramBaseClient(abc.ABC):
     # region Invoking Telegram requests
 
     @abc.abstractmethod
-    def __call__(self, request, retries=5, ordered=False):
+    def __call__(self, request, ordered=False):
         """
         Invokes (sends) one or more MTProtoRequests and returns (receives)
         their result.

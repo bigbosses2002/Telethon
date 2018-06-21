@@ -208,13 +208,31 @@ class MessageMethods(UploadMethods, MessageParseMethods):
                 break
 
             request.offset_id = r.messages[-1].id
-            if isinstance(request, functions.messages.GetHistoryRequest):
-                request.offset_date = r.messages[-1].date
-            else:
-                request.max_date = r.messages[-1].date
+            # Find the first message that's not empty (in some rare cases
+            # it can happen that the last message is :tl:`MessageEmpty`)
+            last_message = None
+            for m in reversed(r.messages):
+                if not isinstance(m, types.MessageEmpty):
+                    last_message = m
+                    break
 
+            if last_message is None:
+                # There are some cases where all the messages we get start
+                # being empty. This can happen on migrated mega-groups if
+                # the history was cleared, and we're using search. Telegram
+                # acts incredibly weird sometimes. Messages are returned but
+                # only "empty", not their contents. If this is the case we
+                # should just give up since there won't be any new Message.
+                break
+            else:
+                if isinstance(request, functions.messages.GetHistoryRequest):
+                    request.offset_date = last_message.date
+                else:
+                    request.max_date = last_message.date
+
+            now = time.time()
             time.sleep(
-                max(wait_time - (time.time() - start), 0))
+                max(wait_time - (now - start), 0))
 
     def get_messages(self, *args, **kwargs):
         """
@@ -629,10 +647,13 @@ class MessageMethods(UploadMethods, MessageParseMethods):
         if total:
             total[0] = len(ids)
 
+        from_id = None  # By default, no need to validate from_id
         if isinstance(entity, types.InputPeerChannel):
             r = self(functions.channels.GetMessagesRequest(entity, ids))
         else:
             r = self(functions.messages.GetMessagesRequest(ids))
+            if entity:
+                from_id = utils.get_peer_id(entity)
 
         if isinstance(r, types.messages.MessagesNotModified):
             for _ in ids:
@@ -644,8 +665,13 @@ class MessageMethods(UploadMethods, MessageParseMethods):
 
         # Telegram seems to return the messages in the order in which
         # we asked them for, so we don't need to check it ourselves.
+        #
+        # The passed message IDs may not belong to the desired entity
+        # since the user can enter arbitrary numbers which can belong to
+        # arbitrary chats. Validate these unless ``from_id is None``.
         for message in r.messages:
-            if isinstance(message, types.MessageEmpty):
+            if isinstance(message, types.MessageEmpty) or (
+                    from_id and utils.get_peer_id(message.to_id) != from_id):
                 yield (None)
             else:
                 yield (custom.Message(self, message, entities, entity))

@@ -6,7 +6,7 @@ import struct
 from collections import defaultdict
 from zlib import crc32
 
-from ..source_builder import SourceBuilder
+from ..sourcebuilder import SourceBuilder
 from ..utils import snake_to_camel_case
 
 AUTO_GEN_NOTICE = \
@@ -238,14 +238,22 @@ def _write_resolve(tlobject, builder):
             ac = AUTO_CASTS.get(arg.type, None)
             if not ac:
                 continue
+
+            if arg.is_flag:
+                builder.writeln('if self.{}:', arg.name)
+
             if arg.is_vector:
-                builder.write('self.{0} = [{1} for _x in self.{0}]',
-                              arg.name, ac.format('_x'))
+                builder.writeln('_tmp = []')
+                builder.writeln('for _x in self.{0}:', arg.name)
+                builder.writeln('_tmp.append({})', ac.format('_x'))
+                builder.end_block()
+                builder.writeln('self.{} = _tmp', arg.name)
             else:
-                builder.write('self.{} = {}', arg.name,
+                builder.writeln('self.{} = {}', arg.name,
                               ac.format('self.' + arg.name))
-            builder.writeln(' if self.{} else None'.format(arg.name)
-                            if arg.is_flag else '')
+
+            if arg.is_flag:
+                builder.end_block()
         builder.end_block()
 
 
@@ -650,7 +658,7 @@ def generate_tlobjects(tlobjects, layer, import_depth, output_dir):
     _write_modules(get_file('types'), import_depth, 'TLObject',
                    namespace_types, type_constructors)
 
-    filename = os.path.join(get_file('all_tlobjects.py'))
+    filename = os.path.join(get_file('alltlobjects.py'))
     with open(filename, 'w', encoding='utf-8') as file:
         with SourceBuilder(file) as builder:
             _write_all_tlobjects(tlobjects, layer, builder)
@@ -663,6 +671,6 @@ def clean_tlobjects(output_dir):
         if os.path.isdir(d):
             shutil.rmtree(d)
 
-    tl = get_file('all_tlobjects.py')
+    tl = get_file('alltlobjects.py')
     if os.path.isfile(tl):
         os.remove(tl)

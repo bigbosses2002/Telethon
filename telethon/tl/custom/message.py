@@ -167,20 +167,26 @@ class Message:
 
         `input_sender` needs to be available (often the case).
         """
-        if self._sender is None:
+        if self._sender is None and self.input_sender:
             try:
                 self._sender =\
-                    self._client.get_entity(self.input_sender)
+                    self._client.get_entity(self._input_sender)
             except ValueError:
                 self._reload_message()
         return self._sender
 
     @property
     def chat(self):
-        if self._chat is None:
+        """
+        The (:tl:`User` | :tl:`Chat` | :tl:`Channel`, optional) on which
+        the event occurred. This property may make an API call the first time
+        to get the most up to date version of the chat (mostly when the event
+        doesn't belong to a channel), so keep that in mind.
+        """
+        if self._chat is None and self.input_chat:
             try:
                 self._chat =\
-                    self._client.get_entity(self.input_chat)
+                    self._client.get_entity(self._input_chat)
             except ValueError:
                 self._reload_message()
         return self._chat
@@ -401,6 +407,12 @@ class Message:
         """
         Whether the message is outgoing (i.e. you sent it from
         another session) or incoming (i.e. someone else sent it).
+
+        Note that messages in your own chat are always incoming,
+        but this property will be ``True`` if you send a message
+        to your own chat. Messages you forward to your chat are
+        *not* considered outgoing, just like official clients
+        display them.
         """
         return self.original_message.out
 
@@ -534,6 +546,9 @@ class Message:
                 >>> for _, inner_text in m.get_entities_text(MessageEntityCode):
                 >>>     print(inner_text)
         """
+        if not self.original_message.entities:
+            return []
+
         if cls and self.original_message.entities:
             texts = get_inner_text(
                 self.original_message.message,

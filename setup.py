@@ -42,7 +42,7 @@ LIBRARY_DIR = 'telethon'
 
 ERRORS_IN_JSON = os.path.join(GENERATOR_DIR, 'data', 'errors.json')
 ERRORS_IN_DESC = os.path.join(GENERATOR_DIR, 'data', 'error_descriptions')
-ERRORS_OUT = os.path.join(LIBRARY_DIR, 'errors', 'rpc_error_list.py')
+ERRORS_OUT = os.path.join(LIBRARY_DIR, 'errors', 'rpcerrorlist.py')
 
 INVALID_BM_IN = os.path.join(GENERATOR_DIR, 'data', 'invalid_bot_methods.json')
 
@@ -220,12 +220,7 @@ def main():
             ],
             keywords='telegram api chat client library messaging mtproto',
             packages=find_packages(exclude=[
-                'telethon_generator', 'telethon_tests', 'run_tests.py',
-                'try_telethon.py',
-                'telethon_generator/parser/__init__.py',
-                'telethon_generator/parser/source_builder.py',
-                'telethon_generator/parser/tl_object.py',
-                'telethon_generator/parser/tl_parser.py',
+                'telethon_*', 'run_tests.py', 'try_telethon.py'
             ]),
             install_requires=['pyaes', 'rsa',
                               'typing' if version_info < (3, 5, 2) else ""],

@@ -82,7 +82,13 @@ class EventBuilder(abc.ABC):
 
 
 class EventCommon(abc.ABC):
-    """Intermediate class with common things to all events"""
+    """
+    Intermediate class with common things to all events.
+
+    All events (except `Raw`) have ``is_private``, ``is_group``
+    and ``is_channel`` boolean properties, as well as an
+    ``original_update`` field containing the original :tl:`Update`.
+    """
     _event_name = 'Event'
 
     def __init__(self, chat_peer=None, msg_id=None, broadcast=False):
@@ -92,8 +98,6 @@ class EventCommon(abc.ABC):
         self._message_id = msg_id
         self._input_chat = None
         self._chat = None
-
-        self.pattern_match = None
         self.original_update = None
 
         self.is_private = isinstance(chat_peer, types.PeerUser)
@@ -143,6 +147,9 @@ class EventCommon(abc.ABC):
 
     @property
     def client(self):
+        """
+        The `telethon.TelegramClient` that created this event.
+        """
         return self._client
 
     @property

@@ -1,6 +1,8 @@
+import concurrent.futures
 import itertools
 import logging
 import queue
+import random
 import time
 import warnings
 
@@ -15,9 +17,31 @@ class UpdateMethods(UserMethods):
 
     # region Public methods
 
+    def run_until_disconnected(self):
+        """
+        Runs the event loop until `disconnect` is called or if an error
+        while connecting/sending/receiving occurs in the background. In
+        the latter case, said error will ``raise`` so you have a chance
+        to ``except`` it on your own code.
+
+        This method shouldn't be called from ``async def`` as the loop
+        will be running already. Use ``await client.disconnected`` in
+        this situation instead.
+        """
+        concurrent.futures.wait([self.disconnected])
+
     def on(self, event):
         """
-        Decorator helper method around add_event_handler().
+        Decorator helper method around `add_event_handler`. Example:
+
+        >>> from telethon import TelegramClient, events
+        >>> client = TelegramClient(...)
+        >>>
+        >>> @client.on(events.NewMessage)
+        ... def handler(event):
+        ...     ...
+        ...
+        >>>
 
         Args:
             event (`_EventBuilder` | `type`):
@@ -153,26 +177,63 @@ class UpdateMethods(UserMethods):
     # region Private methods
 
     def _handle_update(self, update):
+        self.session.process_entities(update)
         if isinstance(update, (types.Updates, types.UpdatesCombined)):
             entities = {utils.get_peer_id(x): x for x in
                         itertools.chain(update.users, update.chats)}
             for u in update.updates:
                 u._entities = entities
-                self._updates.put_nowait(u)
-            return
+                self._handle_update(u)
         if isinstance(update, types.UpdateShort):
-            update = update.update
-        update._entities = {}
-        self._updates.put(update)
+            self._handle_update(update.update)
+        else:
+            update._entities = getattr(update, '_entities', {})
+            self._updates.put(update)
+
+        need_diff = False
+        if hasattr(update, 'pts'):
+            if self._state.pts and (update.pts - self._state.pts) > 1:
+                need_diff = True
+            self._state.pts = update.pts
+        if hasattr(update, 'date'):
+            self._state.date = update.date
+        if hasattr(update, 'seq'):
+            self._state.seq = update.seq
+
+        # TODO make use of need_diff
 
     def _update_loop(self):
+        # Pings' ID don't really need to be secure, just "random"
+        rnd = lambda: random.randrange(-2**63, 2**63)
         while self.is_connected():
             try:
                 update = self._updates.get(timeout=1)
             except queue.Empty:
-                continue
+                pass
+            except:
+                continue  # Any disconnected exception should be ignored
             else:
                 self._dispatch_update(update)
+
+            last_ping = getattr(self, '_last_ping', 0)
+            if time.time() - last_ping > 60:
+                # We also don't really care about their result.
+                # Just send them periodically.
+                self._sender.send(functions.PingRequest(rnd()))
+                self._last_ping = time.time()
+
+            # We need to send some content-related request at least hourly
+            # for Telegram to keep delivering updates, otherwise they will
+            # just stop even if we're connected. Do so every 30 minutes.
+            #
+            # TODO Call getDifference instead since it's more relevant
+            if time.time() - self._last_request > 30 * 60:
+                if not self.is_user_authorized():
+                    # What can be the user doing for so
+                    # long without being logged in...?
+                    continue
+
+                self(functions.updates.GetStateRequest())
 
     def _dispatch_update(self, update):
         if self._events_pending_resolve:

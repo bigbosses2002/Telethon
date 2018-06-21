@@ -8,7 +8,6 @@ class GzipPacked(TLObject):
     CONSTRUCTOR_ID = 0x3072cfa1
 
     def __init__(self, data):
-        super().__init__()
         self.data = data
 
     @staticmethod
@@ -20,7 +19,6 @@ class GzipPacked(TLObject):
            Note that this only applies to content related requests.
         """
         data = bytes(request)
-        # TODO This threshold could be configurable
         if isinstance(request, TLRequest) and len(data) > 512:
             gzipped = bytes(GzipPacked(data))
             return gzipped if len(gzipped) < len(data) else data
@@ -28,7 +26,6 @@ class GzipPacked(TLObject):
             return data
 
     def __bytes__(self):
-        # TODO Maybe compress level could be an option
         return struct.pack('<I', GzipPacked.CONSTRUCTOR_ID) + \
                TLObject.serialize_bytes(gzip.compress(self.data))
 
@@ -40,3 +37,9 @@ class GzipPacked(TLObject):
     @classmethod
     def from_reader(cls, reader):
         return GzipPacked(gzip.decompress(reader.tgread_bytes()))
+
+    def to_dict(self):
+        return {
+            '_': 'GzipPacked',
+            'data': self.data
+        }

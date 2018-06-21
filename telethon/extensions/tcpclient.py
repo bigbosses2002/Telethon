@@ -11,7 +11,6 @@ import threading
 import errno
 import logging
 import socket
-from datetime import timedelta
 from io import BytesIO
 
 CONN_RESET_ERRNOS = {
@@ -38,7 +37,7 @@ class TcpClient:
     class SocketClosed(ConnectionError):
         pass
 
-    def __init__(self, *, proxy=None, timeout=timedelta(seconds=5)):
+    def __init__(self, *, timeout, proxy=None):
         """
         Initializes the TCP client.
 
@@ -104,8 +103,10 @@ class TcpClient:
 
     def close(self):
         """Closes the connection."""
+        fd = None
         try:
             if self._socket is not None:
+                fd = self._socket.fileno()
                 if self.is_connected:
                     self._socket.shutdown(socket.SHUT_RDWR)
                 self._socket.close()
@@ -114,6 +115,8 @@ class TcpClient:
         finally:
             self._socket = None
             self._closed.set()
+            if fd:
+                self._loop.remove_reader(fd)
 
     def write(self, data):
         """
