@@ -210,7 +210,7 @@ class DownloadMethods(UserMethods):
                 try:
                     result = sender.send(functions.upload.GetFileRequest(
                         input_location, offset, part_size
-                    ))
+                    )).result()
                     if isinstance(result, types.upload.FileCdnRedirect):
                         # TODO Implement
                         raise NotImplementedError

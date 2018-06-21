@@ -57,7 +57,6 @@ class Connection(abc.ABC):
     def clone(self):
         """Creates a copy of this Connection."""
         return self.__class__(
-            loop=self._loop,
             proxy=self._proxy,
             timeout=self._timeout
         )
