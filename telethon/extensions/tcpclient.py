@@ -103,7 +103,6 @@ class TcpClient:
 
     def close(self):
         """Closes the connection."""
-        fd = None
         try:
             if self._socket is not None:
                 fd = self._socket.fileno()
@@ -115,8 +114,6 @@ class TcpClient:
         finally:
             self._socket = None
             self._closed.set()
-            if fd:
-                self._loop.remove_reader(fd)
 
     def write(self, data):
         """

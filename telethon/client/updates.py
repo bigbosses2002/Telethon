@@ -23,10 +23,6 @@ class UpdateMethods(UserMethods):
         while connecting/sending/receiving occurs in the background. In
         the latter case, said error will ``raise`` so you have a chance
         to ``except`` it on your own code.
-
-        This method shouldn't be called from ``async def`` as the loop
-        will be running already. Use ``await client.disconnected`` in
-        this situation instead.
         """
         concurrent.futures.wait([self.disconnected])
 

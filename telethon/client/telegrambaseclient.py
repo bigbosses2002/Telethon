@@ -299,7 +299,9 @@ class TelegramBaseClient(abc.ABC):
         Disconnects from Telegram.
         """
         self._sender.disconnect()
-        self._updates_handle.join()
+        # This method can be called from its own thread, so don't join self
+        if self._updates_handle != threading.current_thread():
+            self._updates_handle.join()
         self.session.close()
 
     def _switch_dc(self, new_dc):
