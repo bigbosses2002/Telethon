@@ -224,7 +224,7 @@ class TelegramBaseClient(abc.ABC):
         self._authorized = None  # None = We don't know yet
 
         # Default PingRequest delay
-        self._last_ping = datetime.now()
+        self._last_ping = time.time()
         self._ping_delay = timedelta(minutes=1)
 
         self._updates = queue.Queue()

@@ -215,8 +215,7 @@ class UpdateMethods(UserMethods):
             else:
                 self._dispatch_update(update)
 
-            last_ping = getattr(self, '_last_ping', 0)
-            if time.time() - last_ping > 60:
+            if time.time() - self._last_ping > 60:
                 # We also don't really care about their result.
                 # Just send them periodically.
                 self._sender.send(functions.PingRequest(rnd()))
