@@ -36,17 +36,16 @@ Getting Started
 
 .. code-block:: python
 
-    import asyncio
     from telethon import TelegramClient, events
 
     client = TelegramClient('name', api_id, api_hash)
 
     @client.on(events.NewMessage)
-    async def my_event_handler(event):
+    def my_event_handler(event):
         if 'hello' in event.raw_text:
-            await event.reply('hi!')
+            event.reply('hi!')
 
-    asyncio.get_event_loop().run_until_complete(client.start())
+    client.start()
     client.run_until_disconnected()
 
 
@@ -54,7 +53,6 @@ Not much, but there might be some things unclear. What does this code do?
 
 .. code-block:: python
 
-    import asyncio
     from telethon import TelegramClient, events
 
     client = TelegramClient('name', api_id, api_hash)
@@ -75,9 +73,9 @@ the callback function you're about to define will be called:
 
 .. code-block:: python
 
-    async def my_event_handler(event):
+    def my_event_handler(event):
         if 'hello' in event.raw_text:
-            await event.reply('hi!')
+            event.reply('hi!')
 
 
 If a `NewMessage
@@ -88,12 +86,12 @@ with a ``'hi!'`` message.
 
 .. code-block:: python
 
-    asyncio.get_event_loop().run_until_complete(client.start())
+    client.start()
     client.run_until_disconnected()
 
 
 Finally, this tells the client that we're done with our code. We run the
-``asyncio`` loop until the client starts, and then we run it again until
+start method until the client starts, and then we run the client again until
 we are disconnected. Of course, you can do other things instead of running
 until disconnected. For this refer to :ref:`update-modes`.
 
@@ -146,17 +144,17 @@ for example:
     # Either a single item or a list of them will work for the chats.
     # You can also use the IDs, Peers, or even User/Chat/Channel objects.
     @client.on(events.NewMessage(chats=('TelethonChat', 'TelethonOffTopic')))
-    async def normal_handler(event):
+    def normal_handler(event):
         if 'roll' in event.raw_text:
-            await event.reply(str(random.randint(1, 6)))
+            event.reply(str(random.randint(1, 6)))
 
 
     # Similarly, you can use incoming=True for messages that you receive
     @client.on(events.NewMessage(chats='TelethonOffTopic', outgoing=True,
                                  pattern='eval (.+)'))
-    async def admin_handler(event):
+    def admin_handler(event):
         expression = event.pattern_match.group(1)
-        await event.reply(str(ast.literal_eval(expression)))
+        event.reply(str(ast.literal_eval(expression)))
 
 
 You can pass one or more chats to the ``chats`` parameter (as a list or tuple),
@@ -186,14 +184,14 @@ In short, you should do this:
 .. code-block:: python
 
     @client.on(events.NewMessage)
-    async def handler(event):
+    def handler(event):
         # event.input_chat may be None, use event.get_input_chat()
-        chat = await event.get_input_chat()
-        sender = await event.get_sender()
-        buttons = await event.get_buttons()
+        chat = event.get_input_chat()
+        sender = event.get_sender()
+        buttons = event.get_buttons()
 
-    async def main():
-        async for message in client.iter_messages('me', 10):
+    def main():
+        for message in client.iter_messages('me', 10):
             # Methods from the client always have these properties ready
             chat = message.input_chat
             sender = message.sender
@@ -238,15 +236,15 @@ will cause the propagation of the update through your handlers to stop:
     from telethon.events import StopPropagation
 
     @client.on(events.NewMessage)
-    async def _(event):
+    def _(event):
         # ... some conditions
-        await event.delete()
+        event.delete()
 
         # Other handlers won't have an event to work with
         raise StopPropagation
 
     @client.on(events.NewMessage)
-    async def _(event):
+    def _(event):
         # Will never be reached, because it is the second handler
         # in the chain.
         pass

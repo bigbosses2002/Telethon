@@ -19,10 +19,10 @@ you should use :tl:`GetFullUser`:
 
     from telethon.tl.functions.users import GetFullUserRequest
 
-    async def main():
-        full = await client(GetFullUserRequest(user))
+    def main():
+        full = client(GetFullUserRequest(user))
         # or even
-        full = await client(GetFullUserRequest('username'))
+        full = client(GetFullUserRequest('username'))
 
         bio = full.about
 
@@ -40,9 +40,9 @@ request. Omitted fields won't change after invoking :tl:`UpdateProfile`:
 
     from telethon.tl.functions.account import UpdateProfileRequest
 
-    loop.run_until_complete(client(UpdateProfileRequest(a
+    client(UpdateProfileRequest(a
         bout='This is a test from Telethon'
-    )))
+    ))
 
 
 Updating your username
@@ -54,7 +54,7 @@ You need to use :tl:`account.UpdateUsername`:
 
     from telethon.tl.functions.account import UpdateUsernameRequest
 
-    loop.run_until_complete(client(UpdateUsernameRequest('new_username')))
+    client(UpdateUsernameRequest('new_username'))
 
 
 Updating your profile photo
@@ -68,6 +68,6 @@ through :tl:`UploadProfilePhoto`:
 
     from telethon.tl.functions.photos import UploadProfilePhotoRequest
 
-    loop.run_until_complete(client(UploadProfilePhotoRequest(
+    client(UploadProfilePhotoRequest(
         client.upload_file('/path/to/some/file')
-    )))
+    ))
