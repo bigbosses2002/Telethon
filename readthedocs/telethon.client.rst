@@ -14,7 +14,7 @@ its own methods, which you all can use.
 
     from telethon import TelegramClient
 
-    client = TelegramClient(name, api_id, api_hash).start()
+    client = await TelegramClient(name, api_id, api_hash).start()
     # Now you can use all client methods listed below, like for example...
     client.send_message('me', 'Hello to myself!')
 

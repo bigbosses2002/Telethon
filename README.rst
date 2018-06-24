@@ -4,7 +4,7 @@ Telethon
 
   ⭐️ Thanks **everyone** who has starred the project, it means a lot!
 
-This is the threaded version of the **Telethon** library for Python.
+|logo| This is the threaded version of the **Telethon** library for Python.
 You can its documentation `here <https://telethon.readthedocs.io/en/sync/>`_.
 
 The threaded version is easier to get started with and simpler for quick
@@ -67,3 +67,8 @@ Next steps
 Do you like how Telethon looks? Check out `Read The Docs
 <https://telethon.readthedocs.io/en/sync/>`_ for a more in-depth explanation,
 with examples, troubleshooting issues, and more useful information.
+
+
+.. |logo| image:: logo.svg
+    :width: 24pt
+    :height: 24pt
