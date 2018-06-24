@@ -312,6 +312,11 @@ class MTProtoSender:
             __log__.error('Failed to reconnect automatically.')
             self._disconnect(error=ConnectionError())
 
+    def _start_reconnect(self):
+        """Starts a reconnection in the background."""
+        if self._user_connected:
+            threading.Thread(target=self._reconnect, daemon=True).start()
+
     def _clean_containers(self, msg_ids):
         """
         Helper method to clean containers from the pending messages
@@ -389,8 +394,7 @@ class MTProtoSender:
                         __log__.exception('Unhandled exception while receiving')
                         time.sleep(1)
 
-                    threading.Thread(target=self._reconnect,
-                                     daemon=True).start()
+                    self._start_reconnect()
                     break
             else:
                 # Remove the cancelled messages from pending
@@ -429,8 +433,7 @@ class MTProtoSender:
                     __log__.exception('Unhandled exception while receiving')
                     time.sleep(1)
 
-                threading.Thread(target=self._reconnect,
-                                 daemon=True).start()
+                self._start_reconnect()
                 break
 
             # TODO Check salt, session_id and sequence_number
@@ -449,8 +452,7 @@ class MTProtoSender:
                 # an actually broken authkey?
                 __log__.warning('Broken authorization key?: {}'.format(e))
                 self.state.auth_key = None
-                threading.Thread(target=self._reconnect,
-                                 daemon=True).start()
+                self._start_reconnect()
                 break
             except SecurityError as e:
                 # A step while decoding had the incorrect data. This message

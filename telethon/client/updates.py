@@ -24,7 +24,10 @@ class UpdateMethods(UserMethods):
         the latter case, said error will ``raise`` so you have a chance
         to ``except`` it on your own code.
         """
-        concurrent.futures.wait([self.disconnected])
+        try:
+            concurrent.futures.wait([self.disconnected])
+        except KeyboardInterrupt:
+            self.disconnect()
 
     def on(self, event):
         """

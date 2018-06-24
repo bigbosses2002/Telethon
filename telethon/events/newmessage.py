@@ -88,7 +88,11 @@ class NewMessage(EventBuilder):
                 media_unread=update.media_unread,
                 silent=update.silent,
                 id=update.id,
-                to_id=types.PeerUser(update.user_id),
+                # Note that to_id/from_id complement each other in private
+                # messages, depending on whether the message was outgoing.
+                to_id=types.PeerUser(
+                    update.user_id if update.out else self._self_id
+                ),
                 from_id=self._self_id if update.out else update.user_id,
                 message=update.message,
                 date=update.date,
@@ -174,7 +178,7 @@ class NewMessage(EventBuilder):
                 >>> from telethon import TelegramClient, events
                 >>> client = TelegramClient(...)
                 >>>
-                >>> @client.on(events.NewMessage(pattern=r'hi (\w+)!'))
+                >>> @client.on(events.NewMessage(pattern=r'hi (\\w+)!'))
                 ... def handler(event):
                 ...     # In this case, the result is a ``Match`` object
                 ...     # since the ``str`` pattern was converted into
