@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import asyncio
 import traceback
 
 from telethon_examples.interactive_telegram_client \
@@ -39,15 +38,14 @@ if __name__ == '__main__':
         **kwargs)
 
     print('Initialization done!')
-    loop = asyncio.get_event_loop()
 
     try:
-        loop.run_until_complete(client.run())
+        client.run()
 
     except Exception as e:
         print('Unexpected error ({}): {} at\n{}'.format(
             type(e), e, traceback.format_exc()))
 
     finally:
-        loop.run_until_complete(client.disconnect())
+        client.disconnect()
         print('Thanks for trying the interactive example! Exiting...')
