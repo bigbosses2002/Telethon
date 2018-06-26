@@ -65,7 +65,11 @@ class TcpClient:
         """
         if ':' in ip:  # IPv6
             ip = ip.replace('[', '').replace(']', '')
-            mode, address = socket.AF_INET6, (ip, port, 0, 0)
+            if self.proxy:
+                # IPv4 to IPv6
+                mode, address = socket.AF_INET6, (ip, port, 0, 0)
+            else:
+                mode, address = socket.AF_INET6, (ip, port, 0, 0)
         else:
             mode, address = socket.AF_INET, (ip, port)
 
@@ -80,7 +84,8 @@ class TcpClient:
             except OSError as e:
                 __log__.info('OSError "%s" raised while connecting', e)
                 # Stop retrying to connect if proxy connection error occurred
-                if socks and isinstance(e, socks.ProxyConnectionError):
+                if socks and isinstance(e, (socks.ProxyConnectionError, socks.SOCKS5Error,
+                                            socks.GeneralProxyError, socks.SOCKS4Error)):
                     raise
                 # There are some errors that we know how to handle, and
                 # the loop will allow us to retry
