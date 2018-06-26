@@ -67,7 +67,7 @@ class TcpClient:
             ip = ip.replace('[', '').replace(']', '')
             if self.proxy:
                 # IPv4 to IPv6
-                mode, address = socket.AF_INET6, (ip, port, 0, 0)
+                mode, address = socket.AF_INET, (ip, port, 0, 0)
             else:
                 mode, address = socket.AF_INET6, (ip, port, 0, 0)
         else:
